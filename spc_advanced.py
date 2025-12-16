@@ -46,6 +46,8 @@ COL_DATE = 'TARİH'
 COL_GROUP = 'KESİT'
 COL_MACHINE = 'MAKİNE'
 
+# Önceden tanımlı parametreler (varsa bunlar gösterilir, yoksa dosyadan algılanır)
+# NOT: Sütun adları Excel'deki satır sonları (\n) dahil olmalı
 PARAM_MAP = {
     'Birim Ağırlık (g/m)': {
         'sutun': 'TARTILAN BİRİM AĞIRLIK',
@@ -60,13 +62,13 @@ PARAM_MAP = {
         'icon': '⚖️'
     },
     'Başlangıç Direnç (Ω)': {
-        'sutun': 'KALİTE BAŞLANGIÇ ÖLÇÜLEN DİRENÇ',
+        'sutun': 'KALİTE BAŞLANGIÇ \nÖLÇÜLEN DİRENÇ',
         'aciklama': 'Üretim başlangıcında ölçülen elektriksel direnç değeri.',
         'birim': 'Ω (Ohm)',
         'icon': '🔌'
     },
     'Bitiş Direnç (Ω)': {
-        'sutun': 'KALİTE BİTİŞ ÖLÇÜLEN DİRENÇ',
+        'sutun': 'KALİTE BİTİŞ \nÖLÇÜLEN DİRENÇ',
         'aciklama': 'Üretim bitişinde ölçülen elektriksel direnç değeri.',
         'birim': 'Ω (Ohm)',
         'icon': '🔌'
@@ -96,6 +98,9 @@ PARAM_MAP = {
         'icon': '📉'
     }
 }
+
+# Hariç tutulacak sütunlar (sayısal olsa bile analiz dışı)
+EXCLUDED_COLUMNS = ['TARİH', 'BARKOD NUMARASI', 'MAKİNE', 'KESİT', 'ID', 'INDEX']
 
 # ============================================
 # CSS STİLLERİ
@@ -220,12 +225,134 @@ st.markdown("""
         font-size: 0.85rem;
         color: #166534;
     }
+    
+    .column-selector {
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        padding: 1rem;
+        margin: 0.5rem 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # ============================================
 # GELİŞMİŞ YARDIMCI FONKSİYONLAR
 # ============================================
+
+def get_available_numeric_columns(df):
+    """DataFrame'deki tüm sayısal sütunları döndür (object tipindeki sayısal veriler dahil)"""
+    numeric_cols = []
+    
+    for col in df.columns:
+        col_upper = col.upper().replace('\n', ' ').strip()
+        
+        # Hariç tutulacak sütunları atla
+        excluded = False
+        for exc in EXCLUDED_COLUMNS:
+            if exc.upper() in col_upper:
+                excluded = True
+                break
+        if excluded:
+            continue
+        
+        # Zaten sayısal mı?
+        if np.issubdtype(df[col].dtype, np.number):
+            numeric_cols.append(col)
+        else:
+            # Object tipindeyse sayısala çevirmeyi dene
+            try:
+                numeric_vals = pd.to_numeric(df[col], errors='coerce')
+                valid_ratio = numeric_vals.notna().sum() / len(df)
+                # En az %50 geçerli sayısal değer varsa kabul et
+                if valid_ratio >= 0.5:
+                    numeric_cols.append(col)
+            except:
+                pass
+    
+    return numeric_cols
+
+def convert_column_to_numeric(df, col):
+    """Sütunu sayısal tipe çevir"""
+    if np.issubdtype(df[col].dtype, np.number):
+        return df[col]
+    else:
+        return pd.to_numeric(df[col], errors='coerce')
+
+def get_column_info(col_name, df):
+    """Sütun hakkında bilgi döndür"""
+    # Sütun adını normalize et (satır sonu karakterlerini boşlukla değiştir ve trim et)
+    col_normalized = ' '.join(col_name.split()).upper()
+    
+    # Önce PARAM_MAP'te tanımlı mı kontrol et
+    for param_name, param_info in PARAM_MAP.items():
+        # PARAM_MAP'teki sütun adını da normalize et
+        param_sutun_normalized = ' '.join(param_info['sutun'].split()).upper()
+        
+        if param_sutun_normalized == col_normalized:
+            return {
+                'display_name': param_name,
+                'sutun': col_name,  # Orijinal sütun adını kullan
+                'aciklama': param_info['aciklama'],
+                'birim': param_info['birim'],
+                'icon': param_info['icon'],
+                'predefined': True
+            }
+    
+    # PARAM_MAP'te yoksa dinamik bilgi oluştur
+    col_display = ' '.join(col_name.split())  # Satır sonlarını temizle
+    
+    # Birim tahmini
+    birim = '-'
+    icon = '📊'
+    aciklama = f"'{col_display}' sütunu için SPC analizi"
+    
+    col_upper = col_display.upper()
+    if 'DİRENÇ' in col_upper or 'DIRENÇ' in col_upper or 'OHM' in col_upper:
+        birim = 'Ω (Ohm)'
+        icon = '🔌'
+        aciklama = 'Elektriksel direnç ölçümü'
+    elif 'AĞIRLIK' in col_upper or 'WEIGHT' in col_upper:
+        birim = 'g/m'
+        icon = '⚖️'
+        aciklama = 'Ağırlık ölçümü'
+    elif 'CR' in col_upper:
+        birim = '-'
+        icon = '📈'
+        aciklama = 'CR değeri'
+    elif 'ÇAPI' in col_upper or 'DIAMETER' in col_upper or 'CAP' in col_upper:
+        birim = 'mm'
+        icon = '📏'
+        aciklama = 'Çap ölçümü'
+    elif 'UZUNLUK' in col_upper or 'LENGTH' in col_upper:
+        birim = 'm'
+        icon = '📐'
+        aciklama = 'Uzunluk ölçümü'
+    elif 'SICAKLIK' in col_upper or 'TEMP' in col_upper:
+        birim = '°C'
+        icon = '🌡️'
+        aciklama = 'Sıcaklık ölçümü'
+    elif 'BASINÇ' in col_upper or 'PRESSURE' in col_upper:
+        birim = 'bar'
+        icon = '💨'
+        aciklama = 'Basınç ölçümü'
+    elif 'HIZ' in col_upper or 'SPEED' in col_upper:
+        birim = 'm/s'
+        icon = '⚡'
+        aciklama = 'Hız ölçümü'
+    elif 'FARK' in col_upper or 'DIFF' in col_upper:
+        birim = '-'
+        icon = '📐'
+        aciklama = 'Fark değeri'
+    
+    return {
+        'display_name': col_display,
+        'sutun': col_name,
+        'aciklama': aciklama,
+        'birim': birim,
+        'icon': icon,
+        'predefined': False
+    }
 
 def calculate_spc_metrics(data, usl=None, lsl=None):
     """Tüm SPC metriklerini hesapla - GELİŞTİRİLMİŞ"""
@@ -449,14 +576,14 @@ def get_cpk_info(cpk):
             'desc': 'Süreç yeterli, hedeflere uygun',
             'action': 'İzlemeye devam edin'
         }
-    elif cpk >= 1.00:
+    elif cpk >= 1.0:
         return {
             'color': COLORS['warning'],
             'status': 'Kabul Edilebilir',
             'icon': '⚠️',
             'class': 'warning',
-            'desc': 'Süreç sınırda, iyileştirme gerekli',
-            'action': 'İyileştirme planı hazırlayın'
+            'desc': 'Süreç minimum gereksinimleri karşılıyor',
+            'action': 'İyileştirme fırsatları araştırın'
         }
     else:
         return {
@@ -464,38 +591,225 @@ def get_cpk_info(cpk):
             'status': 'Yetersiz',
             'icon': '❌',
             'class': 'danger',
-            'desc': 'Süreç yetersiz, acil müdahale gerekli',
-            'action': 'Acil düzeltici faaliyet başlatın'
+            'desc': 'Süreç yeterli değil, hata oranı yüksek',
+            'action': 'ACİL iyileştirme gerekli!'
         }
 
-def create_gauge_chart(value, title, min_val=0, max_val=2.5, thresholds=[1.0, 1.33, 1.67]):
-    """Cpk için gauge chart oluştur"""
-    if value is None:
-        value = 0
+def format_number(val, decimals=4):
+    """Sayıyı formatla"""
+    if val is None:
+        return '-'
+    return f"{val:,.{decimals}f}"
+
+def count_out_of_limits(data, ucl, lcl):
+    """Limit dışı nokta sayısı"""
+    count = 0
+    for val in data:
+        if ucl and val > ucl:
+            count += 1
+        if lcl and val < lcl:
+            count += 1
+    return count
+
+def create_control_chart(data, x_axis, metrics, usl, lsl, title, violation_points=None, param_name="", unit=""):
+    """I-MR Kontrol grafiği oluştur - GELİŞTİRİLMİŞ"""
+    fig = go.Figure()
+    
+    # Ana veri çizgisi
+    fig.add_trace(go.Scatter(
+        x=x_axis,
+        y=data,
+        mode='lines+markers',
+        name='Ölçüm',
+        line=dict(color=COLORS['primary'], width=2),
+        marker=dict(size=6, color=COLORS['primary']),
+        hovertemplate=f'<b>Değer:</b> %{{y:.4f}} {unit}<extra></extra>'
+    ))
+    
+    # Sigma bantları (arka plan)
+    for band, opacity in [('2sigma', 0.1), ('1sigma', 0.15)]:
+        fig.add_hrect(
+            y0=metrics['sigma_bands'][f'{band}_lower'],
+            y1=metrics['sigma_bands'][f'{band}_upper'],
+            fillcolor=COLORS['primary'],
+            opacity=opacity,
+            line_width=0,
+            annotation_text=f"±{band[0]}σ" if band == '1sigma' else None,
+            annotation_position="right"
+        )
+    
+    # Ortalama çizgisi
+    fig.add_hline(y=metrics['mean'], line_color=COLORS['success'], line_width=2,
+                  annotation_text=f"X̄ = {metrics['mean']:.4f}", annotation_position="left")
+    
+    # Kontrol limitleri
+    fig.add_hline(y=metrics['ucl'], line_color=COLORS['danger'], line_dash='dash', line_width=2,
+                  annotation_text=f"UCL = {metrics['ucl']:.4f}", annotation_position="left")
+    fig.add_hline(y=metrics['lcl'], line_color=COLORS['danger'], line_dash='dash', line_width=2,
+                  annotation_text=f"LCL = {metrics['lcl']:.4f}", annotation_position="left")
+    
+    # Tolerans limitleri (varsa)
+    if usl:
+        fig.add_hline(y=usl, line_color=COLORS['warning'], line_dash='dot', line_width=2,
+                      annotation_text=f"USL = {usl:.4f}", annotation_position="right")
+    if lsl:
+        fig.add_hline(y=lsl, line_color=COLORS['warning'], line_dash='dot', line_width=2,
+                      annotation_text=f"LSL = {lsl:.4f}", annotation_position="right")
+    
+    # Kontrol dışı noktaları işaretle
+    out_of_control = []
+    for i, val in enumerate(data):
+        if val > metrics['ucl'] or val < metrics['lcl']:
+            out_of_control.append(i)
+    
+    if out_of_control:
+        fig.add_trace(go.Scatter(
+            x=[x_axis.iloc[i] if hasattr(x_axis, 'iloc') else x_axis[i] for i in out_of_control],
+            y=[data.iloc[i] for i in out_of_control],
+            mode='markers',
+            name='Kontrol Dışı',
+            marker=dict(size=12, color=COLORS['danger'], symbol='x'),
+            hovertemplate='<b>KONTROL DIŞI!</b><br>Değer: %{y:.4f}<extra></extra>'
+        ))
+    
+    # Kural ihlali noktaları
+    if violation_points:
+        valid_vps = [vp for vp in violation_points if vp < len(data)]
+        if valid_vps:
+            fig.add_trace(go.Scatter(
+                x=[x_axis.iloc[i] if hasattr(x_axis, 'iloc') else x_axis[i] for i in valid_vps],
+                y=[data.iloc[i] for i in valid_vps],
+                mode='markers',
+                name='Kural İhlali',
+                marker=dict(size=10, color=COLORS['purple'], symbol='diamond'),
+                hovertemplate='<b>KURAL İHLALİ</b><br>Değer: %{y:.4f}<extra></extra>'
+            ))
+    
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=16, color='#1e3a5f')),
+        xaxis_title="Zaman / Sıra",
+        yaxis_title=f"{param_name} ({unit})" if unit else param_name,
+        height=500,
+        template="plotly_white",
+        hovermode='x unified',
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        ),
+        font=dict(size=12)
+    )
+    
+    return fig
+
+def create_capability_histogram(data, mean, sigma, usl, lsl, title):
+    """Yetenek histogramı - GELİŞTİRİLMİŞ"""
+    fig = go.Figure()
+    
+    # Histogram
+    fig.add_trace(go.Histogram(
+        x=data,
+        nbinsx=30,
+        name='Dağılım',
+        marker_color=COLORS['light_blue'],
+        opacity=0.7
+    ))
+    
+    # Normal dağılım eğrisi
+    x_range = np.linspace(data.min() - sigma, data.max() + sigma, 100)
+    y_norm = stats.norm.pdf(x_range, mean, sigma) * len(data) * (data.max() - data.min()) / 30
+    
+    fig.add_trace(go.Scatter(
+        x=x_range,
+        y=y_norm,
+        mode='lines',
+        name='Normal Dağılım',
+        line=dict(color=COLORS['primary'], width=3)
+    ))
+    
+    # Limitler
+    fig.add_vline(x=mean, line_color=COLORS['success'], line_width=2,
+                  annotation_text=f"X̄={mean:.4f}", annotation_position="top")
+    
+    if usl:
+        fig.add_vline(x=usl, line_color=COLORS['danger'], line_dash='dash',
+                      annotation_text=f"USL={usl:.4f}", annotation_position="top")
+    if lsl:
+        fig.add_vline(x=lsl, line_color=COLORS['danger'], line_dash='dash',
+                      annotation_text=f"LSL={lsl:.4f}", annotation_position="top")
+    
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=16, color='#1e3a5f')),
+        xaxis_title="Değer",
+        yaxis_title="Frekans",
+        height=400,
+        template="plotly_white",
+        showlegend=True,
+        font=dict(size=12)
+    )
+    
+    return fig
+
+def create_mr_chart(data, x_axis, mr_mean, mr_ucl, title):
+    """Moving Range grafiği"""
+    mr = data.diff().abs().dropna()
+    
+    fig = go.Figure()
+    
+    mr_x = x_axis[1:] if hasattr(x_axis, '__getitem__') else list(range(1, len(mr)+1))
+    
+    fig.add_trace(go.Scatter(
+        x=mr_x,
+        y=mr,
+        mode='lines+markers',
+        name='MR',
+        line=dict(color=COLORS['purple'], width=2),
+        marker=dict(size=6)
+    ))
+    
+    fig.add_hline(y=mr_mean, line_color=COLORS['success'], line_width=2,
+                  annotation_text=f"MR̄ = {mr_mean:.4f}", annotation_position="left")
+    fig.add_hline(y=mr_ucl, line_color=COLORS['danger'], line_dash='dash',
+                  annotation_text=f"UCL = {mr_ucl:.4f}", annotation_position="left")
+    
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=16, color='#1e3a5f')),
+        xaxis_title="Zaman / Sıra",
+        yaxis_title="Moving Range",
+        height=350,
+        template="plotly_white",
+        font=dict(size=12)
+    )
+    
+    return fig
+
+def create_cpk_gauge(cpk):
+    """Cpk için gauge chart"""
+    cpk_info = get_cpk_info(cpk)
     
     fig = go.Figure(go.Indicator(
         mode="gauge+number+delta",
-        value=value,
-        number={'font': {'size': 36, 'color': '#1e3a5f'}, 'suffix': '', 'valueformat': '.2f'},
-        title={'text': title, 'font': {'size': 16, 'color': '#64748b'}},
-        delta={'reference': 1.33, 'increasing': {'color': COLORS['success']}, 'decreasing': {'color': COLORS['danger']}},
+        value=cpk if cpk else 0,
+        number={'suffix': "", 'font': {'size': 40}},
+        title={'text': f"Cpk<br><span style='font-size:0.7em;color:{cpk_info['color']}'>{cpk_info['status']}</span>"},
+        delta={'reference': 1.33, 'increasing': {'color': COLORS['success']}},
         gauge={
-            'axis': {'range': [min_val, max_val], 'tickwidth': 2, 'tickcolor': "#64748b",
-                     'tickvals': [0, 0.5, 1.0, 1.33, 1.67, 2.0, 2.5],
-                     'ticktext': ['0', '0.5', '1.0', '1.33', '1.67', '2.0', '2.5']},
-            'bar': {'color': get_cpk_info(value)['color'], 'thickness': 0.75},
-            'bgcolor': "white",
+            'axis': {'range': [0, 2.5], 'tickwidth': 1},
+            'bar': {'color': cpk_info['color'], 'thickness': 0.75},
+            'bgcolor': 'white',
             'borderwidth': 2,
-            'bordercolor': "#e2e8f0",
+            'bordercolor': '#e2e8f0',
             'steps': [
-                {'range': [0, 1.0], 'color': '#fecaca'},
-                {'range': [1.0, 1.33], 'color': '#fed7aa'},
-                {'range': [1.33, 1.67], 'color': '#bbf7d0'},
+                {'range': [0, 1.0], 'color': COLORS['light_red']},
+                {'range': [1.0, 1.33], 'color': '#fef3c7'},
+                {'range': [1.33, 1.67], 'color': COLORS['light_green']},
                 {'range': [1.67, 2.5], 'color': '#86efac'}
             ],
             'threshold': {
-                'line': {'color': "#1e3a5f", 'width': 3},
-                'thickness': 0.8,
+                'line': {'color': COLORS['danger'], 'width': 3},
+                'thickness': 0.75,
                 'value': 1.33
             }
         }
@@ -503,300 +817,32 @@ def create_gauge_chart(value, title, min_val=0, max_val=2.5, thresholds=[1.0, 1.
     
     fig.update_layout(
         height=280,
-        margin=dict(l=30, r=30, t=60, b=30),
-        paper_bgcolor='rgba(0,0,0,0)',
-        font={'family': 'Arial'}
+        margin=dict(l=20, r=20, t=60, b=20),
+        font=dict(size=14)
     )
     
     return fig
-
-def create_capability_histogram(data, mean, sigma, usl=None, lsl=None, title="Yetenek Histogramı"):
-    """Gelişmiş capability histogram"""
-    fig = go.Figure()
-    
-    # Histogram
-    fig.add_trace(go.Histogram(
-        x=data,
-        nbinsx=35,
-        name='Dağılım',
-        marker_color=COLORS['primary'],
-        opacity=0.7,
-        hovertemplate='<b>Aralık:</b> %{x}<br><b>Frekans:</b> %{y}<extra></extra>'
-    ))
-    
-    # Normal eğri
-    x_range = np.linspace(data.min() - sigma, data.max() + sigma, 200)
-    y_norm = stats.norm.pdf(x_range, mean, sigma)
-    scale = len(data) * (data.max() - data.min()) / 35
-    
-    fig.add_trace(go.Scatter(
-        x=x_range, y=y_norm * scale,
-        mode='lines',
-        name='Normal Dağılım',
-        line=dict(color=COLORS['danger'], width=3)
-    ))
-    
-    # Ortalama çizgisi
-    fig.add_vline(x=mean, line_color=COLORS['success'], line_width=3,
-                  annotation_text=f"X̄ = {mean:.4f}", 
-                  annotation_position="top",
-                  annotation_font_size=12,
-                  annotation_font_color=COLORS['success'])
-    
-    # Spec limitleri
-    if usl is not None:
-        fig.add_vline(x=usl, line_color=COLORS['warning'], line_width=3, line_dash='dash',
-                      annotation_text=f"USL = {usl:.4f}",
-                      annotation_position="top right",
-                      annotation_font_size=11)
-        # USL dışı alan
-        fig.add_vrect(x0=usl, x1=data.max() + sigma, fillcolor="rgba(220, 38, 38, 0.15)", line_width=0)
-    
-    if lsl is not None:
-        fig.add_vline(x=lsl, line_color=COLORS['warning'], line_width=3, line_dash='dash',
-                      annotation_text=f"LSL = {lsl:.4f}",
-                      annotation_position="top left",
-                      annotation_font_size=11)
-        # LSL dışı alan
-        fig.add_vrect(x0=data.min() - sigma, x1=lsl, fillcolor="rgba(220, 38, 38, 0.15)", line_width=0)
-    
-    fig.update_layout(
-        title=dict(text=title, font=dict(size=16, color='#1e3a5f')),
-        height=400,
-        template="plotly_white",
-        showlegend=True,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
-        margin=dict(l=60, r=40, t=80, b=60),
-        xaxis_title="Değer",
-        yaxis_title="Frekans",
-        font=dict(size=12)
-    )
-    
-    return fig
-
-def create_control_chart(data, x_axis, metrics, usl=None, lsl=None, title="I-MR Kontrol Grafiği", 
-                         violation_points=None, param_name="", unit=""):
-    """Gelişmiş kontrol grafiği"""
-    fig = go.Figure()
-    
-    mean = metrics['mean']
-    sigma = metrics['sigma_within']
-    ucl = metrics['ucl']
-    lcl = metrics['lcl']
-    
-    # Sigma bantları (arka plan)
-    fig.add_hrect(y0=mean - sigma, y1=mean + sigma,
-                  fillcolor="rgba(34, 197, 94, 0.12)", line_width=0,
-                  annotation_text="±1σ (68%)", annotation_position="right",
-                  annotation_font_size=10, annotation_font_color='#64748b')
-    
-    fig.add_hrect(y0=mean - 2*sigma, y1=mean - sigma,
-                  fillcolor="rgba(234, 179, 8, 0.08)", line_width=0)
-    fig.add_hrect(y0=mean + sigma, y1=mean + 2*sigma,
-                  fillcolor="rgba(234, 179, 8, 0.08)", line_width=0,
-                  annotation_text="±2σ (95%)", annotation_position="right",
-                  annotation_font_size=10, annotation_font_color='#64748b')
-    
-    fig.add_hrect(y0=mean - 3*sigma, y1=mean - 2*sigma,
-                  fillcolor="rgba(239, 68, 68, 0.06)", line_width=0)
-    fig.add_hrect(y0=mean + 2*sigma, y1=mean + 3*sigma,
-                  fillcolor="rgba(239, 68, 68, 0.06)", line_width=0,
-                  annotation_text="±3σ (99.7%)", annotation_position="right",
-                  annotation_font_size=10, annotation_font_color='#64748b')
-    
-    # Ana veri çizgisi
-    fig.add_trace(go.Scatter(
-        x=x_axis, y=data,
-        mode='lines+markers',
-        name='Ölçüm',
-        line=dict(color=COLORS['primary'], width=1.5),
-        marker=dict(size=6, color=COLORS['primary']),
-        hovertemplate='<b>Değer:</b> %{y:.4f}<br><b>Tarih:</b> %{x}<extra></extra>'
-    ))
-    
-    # Ortalama çizgisi
-    fig.add_hline(y=mean, line_color=COLORS['success'], line_width=3,
-                  annotation_text=f"X̄ = {mean:.4f}",
-                  annotation_position="left",
-                  annotation_font_size=13,
-                  annotation_font_color=COLORS['success'])
-    
-    # Kontrol limitleri
-    fig.add_hline(y=ucl, line_dash='dash', line_color=COLORS['danger'], line_width=2.5,
-                  annotation_text=f"UCL = {ucl:.4f}",
-                  annotation_position="right",
-                  annotation_font_size=12,
-                  annotation_font_color=COLORS['danger'])
-    
-    fig.add_hline(y=lcl, line_dash='dash', line_color=COLORS['danger'], line_width=2.5,
-                  annotation_text=f"LCL = {lcl:.4f}",
-                  annotation_position="right",
-                  annotation_font_size=12,
-                  annotation_font_color=COLORS['danger'])
-    
-    # Tolerans limitleri
-    if usl is not None:
-        fig.add_hline(y=usl, line_color=COLORS['warning'], line_width=3, line_dash='dot',
-                      annotation_text=f"USL = {usl}",
-                      annotation_position="right",
-                      annotation_font_size=12,
-                      annotation_font_color=COLORS['warning'])
-    
-    if lsl is not None:
-        fig.add_hline(y=lsl, line_color=COLORS['warning'], line_width=3, line_dash='dot',
-                      annotation_text=f"LSL = {lsl}",
-                      annotation_position="right",
-                      annotation_font_size=12,
-                      annotation_font_color=COLORS['warning'])
-    
-    # Kontrol dışı noktalar
-    out_mask = (data > ucl) | (data < lcl)
-    out_points = data[out_mask]
-    if len(out_points) > 0:
-        out_x = x_axis[out_mask] if hasattr(x_axis, '__getitem__') else [x_axis[i] for i in out_points.index]
-        fig.add_trace(go.Scatter(
-            x=out_x, y=out_points,
-            mode='markers',
-            name='Kontrol Dışı',
-            marker=dict(color=COLORS['danger'], size=14, symbol='x', 
-                       line=dict(width=2, color='white')),
-            hovertemplate='<b>⚠️ Kontrol Dışı</b><br>Değer: %{y:.4f}<extra></extra>'
-        ))
-    
-    # Kural ihlali noktaları
-    if violation_points and len(violation_points) > 0:
-        viol_data = data.iloc[violation_points]
-        if hasattr(x_axis, 'iloc'):
-            viol_x = x_axis.iloc[violation_points]
-        else:
-            viol_x = [x_axis[i] for i in violation_points]
-        
-        fig.add_trace(go.Scatter(
-            x=viol_x, y=viol_data,
-            mode='markers',
-            name='Kural İhlali',
-            marker=dict(color=COLORS['purple'], size=12, symbol='diamond',
-                       line=dict(width=2, color='white')),
-            hovertemplate='<b>⚠️ Kural İhlali</b><br>Değer: %{y:.4f}<extra></extra>'
-        ))
-    
-    fig.update_layout(
-        title=dict(text=title, font=dict(size=18, color='#1e3a5f'), x=0.5),
-        height=550,
-        template="plotly_white",
-        hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5,
-                   font=dict(size=11)),
-        margin=dict(l=70, r=150, t=80, b=70),
-        xaxis_title="Tarih / Sıra",
-        yaxis_title=f"{param_name} ({unit})" if unit else param_name,
-        font=dict(size=12, family='Arial')
-    )
-    
-    return fig
-
-def create_mr_chart(data, x_axis, mr_mean, mr_ucl, title="Moving Range (MR) Grafiği"):
-    """Moving Range grafiği"""
-    mr = data.diff().abs()
-    
-    fig = go.Figure()
-    
-    fig.add_trace(go.Scatter(
-        x=x_axis, y=mr,
-        mode='lines+markers',
-        name='Moving Range',
-        line=dict(color=COLORS['purple'], width=1.5),
-        marker=dict(size=5, color=COLORS['purple']),
-        hovertemplate='<b>MR:</b> %{y:.4f}<extra></extra>'
-    ))
-    
-    fig.add_hline(y=mr_mean, line_color=COLORS['success'], line_width=2.5,
-                  annotation_text=f"MR̄ = {mr_mean:.4f}",
-                  annotation_position="left",
-                  annotation_font_size=12)
-    
-    fig.add_hline(y=mr_ucl, line_dash='dash', line_color=COLORS['danger'], line_width=2,
-                  annotation_text=f"UCL = {mr_ucl:.4f}",
-                  annotation_position="right",
-                  annotation_font_size=11)
-    
-    # MR kontrol dışı
-    mr_out = mr[mr > mr_ucl]
-    if len(mr_out) > 0:
-        if hasattr(x_axis, 'iloc'):
-            mr_out_x = x_axis.iloc[mr_out.index]
-        else:
-            mr_out_x = [x_axis[i] for i in mr_out.index]
-        fig.add_trace(go.Scatter(
-            x=mr_out_x, y=mr_out,
-            mode='markers',
-            name='MR Kontrol Dışı',
-            marker=dict(color=COLORS['danger'], size=12, symbol='x')
-        ))
-    
-    fig.update_layout(
-        title=dict(text=title, font=dict(size=16, color='#1e3a5f')),
-        height=350,
-        template="plotly_white",
-        margin=dict(l=60, r=100, t=60, b=50),
-        xaxis_title="Tarih / Sıra",
-        yaxis_title="Moving Range",
-        font=dict(size=11)
-    )
-    
-    return fig
-
-def count_out_of_limits(data, upper=None, lower=None):
-    """Limit dışı nokta sayısı"""
-    count = 0
-    if upper is not None:
-        count += (data > upper).sum()
-    if lower is not None:
-        count += (data < lower).sum()
-    return int(count)
-
-def format_number(val, decimals=4):
-    """Sayı formatlama"""
-    if val is None:
-        return "-"
-    if abs(val) >= 10000:
-        return f"{val:,.1f}"
-    elif abs(val) >= 1000:
-        return f"{val:,.2f}"
-    elif abs(val) >= 1:
-        return f"{val:.{decimals}f}"
-    else:
-        return f"{val:.{max(decimals, 6)}f}"
 
 # ============================================
 # VERİ YÜKLEME
 # ============================================
-@st.cache_data
-def load_data(file_path):
-    try:
-        if file_path.endswith('.csv'):
-            df = pd.read_csv(file_path)
-        else:
-            df = pd.read_excel(file_path)
-        return df, None
-    except Exception as e:
-        return None, str(e)
-
-# ============================================
-# SIDEBAR
-# ============================================
-if os.path.exists(LOGO_DOSYA_ADI):
-    st.sidebar.image(LOGO_DOSYA_ADI, width=180)
-    
-st.sidebar.markdown(f"## 📊 {SIRKET_ISMI}")
-st.sidebar.markdown("**Gelişmiş SPC Analiz Sistemi v2.0**")
+st.sidebar.markdown(f"### 📊 {SIRKET_ISMI}")
 st.sidebar.markdown("---")
 
-# Veri yükleme
+# Logo
+if os.path.exists(LOGO_DOSYA_ADI):
+    st.sidebar.image(LOGO_DOSYA_ADI, width=200)
+
 df = None
+error = None
+
+# Önce sabit dosyayı dene
 if os.path.exists(SABIT_DOSYA_ADI):
-    df, error = load_data(SABIT_DOSYA_ADI)
-    if error:
+    try:
+        df = pd.read_excel(SABIT_DOSYA_ADI)
+        st.sidebar.success(f"✅ Yüklendi: {os.path.basename(SABIT_DOSYA_ADI)}")
+    except Exception as e:
+        error = str(e)
         st.sidebar.error(f"Hata: {error}")
 else:
     uploaded = st.sidebar.file_uploader("📁 Veri Yükle", type=['xlsx', 'csv'])
@@ -836,6 +882,7 @@ if df is None:
         - 📈 **Normallik Testi**: Shapiro-Wilk testi
         - 🔍 **Sigma Bantları**: 1σ, 2σ, 3σ görselleştirme
         - 📋 **Detaylı Raporlama**: Aksiyon önerileri
+        - 🔧 **Dinamik Sütun Seçimi**: Tüm sayısal sütunları analiz edin
         """)
     
     st.stop()
@@ -846,8 +893,21 @@ if df is None:
 if COL_DATE in df.columns:
     df[COL_DATE] = pd.to_datetime(df[COL_DATE], errors='coerce')
 
-if 'KALİTE BAŞLANGIÇ ÖLÇÜLEN DİRENÇ' in df.columns and 'KALİTE BİTİŞ ÖLÇÜLEN DİRENÇ' in df.columns:
-    df['DIRENC_FARKI'] = df['KALİTE BAŞLANGIÇ ÖLÇÜLEN DİRENÇ'] - df['KALİTE BİTİŞ ÖLÇÜLEN DİRENÇ']
+# Direnç farkı hesapla (varsa)
+direnc_baslangic_col = None
+direnc_bitis_col = None
+for col in df.columns:
+    col_normalized = col.replace('\n', ' ').upper()
+    if 'KALİTE BAŞLANGIÇ' in col_normalized and 'DİRENÇ' in col_normalized:
+        direnc_baslangic_col = col
+    if 'KALİTE BİTİŞ' in col_normalized and 'DİRENÇ' in col_normalized:
+        direnc_bitis_col = col
+
+if direnc_baslangic_col and direnc_bitis_col:
+    # Önce sayısal tipe çevir
+    baslangic_numeric = pd.to_numeric(df[direnc_baslangic_col], errors='coerce')
+    bitis_numeric = pd.to_numeric(df[direnc_bitis_col], errors='coerce')
+    df['DIRENC_FARKI'] = baslangic_numeric - bitis_numeric
 
 df_original = df.copy()
 
@@ -938,37 +998,77 @@ with col4:
     """, unsafe_allow_html=True)
 
 # ============================================
-# PARAMETRE SEÇİMİ
+# DİNAMİK PARAMETRE SEÇİMİ
 # ============================================
 st.markdown('<p class="section-header">🔬 Parametre Seçimi</p>', unsafe_allow_html=True)
 
-mevcut_params = {}
-for key, val in PARAM_MAP.items():
-    if val['sutun'] in df.columns:
-        mevcut_params[key] = val
+# Mevcut sayısal sütunları al
+available_numeric_cols = get_available_numeric_columns(df)
 
-if not mevcut_params:
-    st.error("❌ Analiz edilebilecek parametre bulunamadı!")
+if not available_numeric_cols:
+    st.error("❌ Analiz edilebilecek sayısal sütun bulunamadı!")
     st.stop()
 
-col_select, col_info = st.columns([2, 3])
+# Her sütun için bilgi al
+column_options = {}
+for col in available_numeric_cols:
+    col_info = get_column_info(col, df)
+    display_name = col_info['display_name']
+    # Eğer aynı isimde başka bir sütun varsa, orijinal sütun adını da ekle
+    if display_name in column_options:
+        display_name = f"{display_name} [{col[:20]}...]"
+    column_options[display_name] = col_info
+
+# Parametre seçimi
+col_select, col_info_display = st.columns([2, 3])
 
 with col_select:
-    secili_param = st.selectbox(
+    # Önceden tanımlı parametreleri üste al
+    predefined = [k for k, v in column_options.items() if v['predefined']]
+    dynamic = [k for k, v in column_options.items() if not v['predefined']]
+    
+    all_options = predefined + (['─' * 20] if predefined and dynamic else []) + dynamic
+    
+    # Seçim kutusu
+    selected_display = st.selectbox(
         "📈 Analiz edilecek parametre:",
-        list(mevcut_params.keys())
+        [opt for opt in all_options if opt != '─' * 20],
+        help="Excel dosyasındaki tüm sayısal sütunlar listelenir"
     )
 
-param_info = mevcut_params[secili_param]
+# Seçilen parametrenin bilgilerini al
+param_info = column_options[selected_display]
+secili_sutun = param_info['sutun']
 
-with col_info:
+with col_info_display:
+    predefined_badge = '<span style="background:#16a34a;color:white;padding:2px 8px;border-radius:4px;font-size:0.75rem;margin-left:8px;">Tanımlı</span>' if param_info['predefined'] else '<span style="background:#6b7280;color:white;padding:2px 8px;border-radius:4px;font-size:0.75rem;margin-left:8px;">Dinamik</span>'
+    
     st.markdown(f"""
     <div class="info-box">
-        <b>{param_info['icon']} {secili_param}</b><br>
+        <b>{param_info['icon']} {param_info['display_name']}</b> {predefined_badge}<br>
         {param_info['aciklama']}<br>
-        <small><b>Birim:</b> {param_info['birim']}</small>
+        <small><b>Birim:</b> {param_info['birim']} | <b>Sütun:</b> {param_info['sutun'].replace(chr(10), ' ')}</small>
     </div>
     """, unsafe_allow_html=True)
+
+# Mevcut sütunları göster
+with st.expander("📋 Dosyadaki Tüm Sayısal Sütunlar", expanded=False):
+    cols_data = []
+    for col in available_numeric_cols:
+        info = get_column_info(col, df)
+        numeric_col = convert_column_to_numeric(df, col)
+        cols_data.append({
+            'Sütun Adı': col.replace('\n', ' '),
+            'Görünen Ad': info['display_name'],
+            'Birim': info['birim'],
+            'Tip': 'Tanımlı' if info['predefined'] else 'Dinamik',
+            'Veri Sayısı': numeric_col.notna().sum(),
+            'Min': f"{numeric_col.min():.4f}" if pd.notna(numeric_col.min()) else '-',
+            'Max': f"{numeric_col.max():.4f}" if pd.notna(numeric_col.max()) else '-'
+        })
+    
+    cols_df = pd.DataFrame(cols_data)
+    st.dataframe(cols_df, use_container_width=True, hide_index=True)
 
 # Tolerans ayarları
 col_tol1, col_tol2, col_tol3 = st.columns([1, 1, 1])
@@ -986,12 +1086,11 @@ if use_spec:
 # ============================================
 # VERİ HAZIRLAMA VE HESAPLAMA
 # ============================================
-secili_sutun = param_info['sutun']
-
 if COL_DATE in df.columns:
     df = df.sort_values(COL_DATE)
 
-data = df[secili_sutun].dropna()
+# Seçilen sütunu sayısal olarak al
+data = convert_column_to_numeric(df, secili_sutun).dropna()
 
 if len(data) < 2:
     st.warning("⚠️ Yeterli veri yok (en az 2 ölçüm gerekli)")
@@ -1001,190 +1100,142 @@ if len(data) < 2:
 metrics = calculate_spc_metrics(data, usl, lsl)
 
 if metrics is None:
-    st.error("❌ Hesaplama hatası!")
+    st.error("❌ SPC hesaplamaları yapılamadı!")
     st.stop()
 
-# Western Electric kuralları kontrolü
-violations, violation_points = check_western_electric_rules(
-    data, metrics['mean'], metrics['sigma_within']
-)
+# Western Electric kuralları
+violations, violation_points = check_western_electric_rules(data, metrics['mean'], metrics['sigma_within'])
+cpk_info = get_cpk_info(metrics['cpk'])
 
 # ============================================
-# ANALİZ SONUÇLARI
+# ANA METRİKLER
 # ============================================
-st.markdown('<p class="section-header">📊 Analiz Sonuçları</p>', unsafe_allow_html=True)
+st.markdown('<p class="section-header">📊 Temel Metrikler</p>', unsafe_allow_html=True)
 
-# İstatistikler
-col1, col2, col3, col4, col5 = st.columns(5)
+col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns(5)
 
-with col1:
+with col_m1:
     st.markdown(f"""
     <div class="metric-card">
-        <div class="metric-label">📈 Ortalama (X̄)</div>
-        <div class="metric-value">{format_number(metrics['mean'])}</div>
-        <div class="metric-desc">Merkezi değer</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col2:
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-label">📊 Std Sapma (σ)</div>
-        <div class="metric-value">{format_number(metrics['sigma_within'])}</div>
-        <div class="metric-desc">Within sigma</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col3:
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-label">⬇️ Minimum</div>
-        <div class="metric-value">{format_number(metrics['min'])}</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col4:
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-label">⬆️ Maksimum</div>
-        <div class="metric-value">{format_number(metrics['max'])}</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col5:
-    out_ctrl = count_out_of_limits(data, metrics['ucl'], metrics['lcl'])
-    card_class = "danger" if out_ctrl > 0 else "excellent"
-    st.markdown(f"""
-    <div class="metric-card {card_class}">
-        <div class="metric-label">🔴 Kontrol Dışı</div>
-        <div class="metric-value">{out_ctrl}</div>
-        <div class="metric-desc">{out_ctrl/len(data)*100:.1f}%</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-# Kontrol limitleri
-col_ucl, col_lcl, col_range, col_n = st.columns(4)
-
-with col_ucl:
-    st.markdown(f"""
-    <div class="metric-card" style="border-left-color: {COLORS['danger']};">
-        <div class="metric-label">🔺 UCL</div>
-        <div class="metric-value" style="color: {COLORS['danger']};">{format_number(metrics['ucl'])}</div>
-        <div class="metric-desc">X̄ + 3σ</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col_lcl:
-    st.markdown(f"""
-    <div class="metric-card" style="border-left-color: {COLORS['danger']};">
-        <div class="metric-label">🔻 LCL</div>
-        <div class="metric-value" style="color: {COLORS['danger']};">{format_number(metrics['lcl'])}</div>
-        <div class="metric-desc">X̄ - 3σ</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col_range:
-    range_val = metrics['max'] - metrics['min']
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-label">↔️ Aralık</div>
-        <div class="metric-value">{format_number(range_val)}</div>
-        <div class="metric-desc">Max - Min</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col_n:
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-label">📋 Veri Sayısı</div>
+        <div class="metric-label">📊 Veri Sayısı</div>
         <div class="metric-value">{metrics['n']:,}</div>
     </div>
     """, unsafe_allow_html=True)
 
+with col_m2:
+    st.markdown(f"""
+    <div class="metric-card">
+        <div class="metric-label">📈 Ortalama (X̄)</div>
+        <div class="metric-value">{format_number(metrics['mean'])}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+with col_m3:
+    st.markdown(f"""
+    <div class="metric-card">
+        <div class="metric-label">📉 Std Sapma (σ)</div>
+        <div class="metric-value">{format_number(metrics['sigma_within'])}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+with col_m4:
+    out_count = count_out_of_limits(data, metrics['ucl'], metrics['lcl'])
+    out_class = 'danger' if out_count > 0 else 'excellent'
+    st.markdown(f"""
+    <div class="metric-card {out_class}">
+        <div class="metric-label">⚠️ Kontrol Dışı</div>
+        <div class="metric-value">{out_count}</div>
+        <div class="metric-desc">{out_count/len(data)*100:.1f}% oran</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+with col_m5:
+    violation_class = 'danger' if len(violations) > 0 else 'excellent'
+    st.markdown(f"""
+    <div class="metric-card {violation_class}">
+        <div class="metric-label">📏 Kural İhlali</div>
+        <div class="metric-value">{len(violations)}</div>
+        <div class="metric-desc">Western Electric</div>
+    </div>
+    """, unsafe_allow_html=True)
+
 # ============================================
-# SÜREÇ YETERLİLİĞİ (Cpk)
+# YETERLİLİK ANALİZİ
 # ============================================
 if metrics['cpk'] is not None:
-    st.markdown('<p class="section-header">⭐ Süreç Yeterliliği</p>', unsafe_allow_html=True)
+    st.markdown('<p class="section-header">⭐ Yeterlilik Analizi</p>', unsafe_allow_html=True)
     
-    cpk_info = get_cpk_info(metrics['cpk'])
-    
-    col_gauge, col_metrics, col_info = st.columns([1.2, 1.5, 1.3])
+    col_gauge, col_indices = st.columns([1, 2])
     
     with col_gauge:
-        gauge_fig = create_gauge_chart(metrics['cpk'], "Cpk Değeri")
+        gauge_fig = create_cpk_gauge(metrics['cpk'])
         st.plotly_chart(gauge_fig, use_container_width=True)
-    
-    with col_metrics:
-        st.markdown("#### 📊 Yeterlilik İndeksleri")
         
-        m1, m2 = st.columns(2)
-        with m1:
+        st.markdown(f"""
+        <div class="alert-box alert-{'success' if cpk_info['class'] in ['excellent', 'good'] else 'warning' if cpk_info['class'] == 'warning' else 'danger'}">
+            <b>{cpk_info['icon']} {cpk_info['status']}</b><br>
+            {cpk_info['desc']}<br>
+            <small><b>Aksiyon:</b> {cpk_info['action']}</small>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col_indices:
+        col_idx1, col_idx2 = st.columns(2)
+        
+        with col_idx1:
             st.markdown(f"""
-            <div class="metric-card">
+            <div class="metric-card {'excellent' if metrics['cp'] and metrics['cp'] >= 1.33 else 'warning'}">
                 <div class="metric-label">Cp (Potansiyel)</div>
                 <div class="metric-value">{format_number(metrics['cp'], 2)}</div>
-                <div class="metric-desc">Merkezleme hariç</div>
+                <div class="metric-desc">Süreç potansiyeli</div>
             </div>
             """, unsafe_allow_html=True)
             
             st.markdown(f"""
-            <div class="metric-card">
+            <div class="metric-card {'excellent' if metrics['pp'] and metrics['pp'] >= 1.33 else 'warning'}">
                 <div class="metric-label">Pp (Uzun Vadeli)</div>
                 <div class="metric-value">{format_number(metrics['pp'], 2)}</div>
-                <div class="metric-desc">Overall sigma ile</div>
+                <div class="metric-desc">Genel performans</div>
             </div>
             """, unsafe_allow_html=True)
         
-        with m2:
+        with col_idx2:
             st.markdown(f"""
             <div class="metric-card {cpk_info['class']}">
-                <div class="metric-label">Cpk {cpk_info['icon']}</div>
-                <div class="metric-value" style="color: {cpk_info['color']};">{format_number(metrics['cpk'], 2)}</div>
-                <div class="metric-desc">{cpk_info['status']}</div>
+                <div class="metric-label">Cpk (Performans)</div>
+                <div class="metric-value">{format_number(metrics['cpk'], 2)}</div>
+                <div class="metric-desc">Kısa vadeli yetenek</div>
             </div>
             """, unsafe_allow_html=True)
             
             st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-label">Ppk</div>
+            <div class="metric-card {'excellent' if metrics['ppk'] and metrics['ppk'] >= 1.33 else 'warning'}">
+                <div class="metric-label">Ppk (Uzun Vadeli)</div>
                 <div class="metric-value">{format_number(metrics['ppk'], 2)}</div>
                 <div class="metric-desc">Uzun vadeli yetenek</div>
             </div>
             """, unsafe_allow_html=True)
-    
-    with col_info:
-        st.markdown("#### 📋 Değerlendirme")
         
-        # Durum kutusu
-        alert_class = f"alert-{'success' if cpk_info['class'] in ['excellent', 'good'] else 'warning' if cpk_info['class'] == 'warning' else 'danger'}"
-        st.markdown(f"""
-        <div class="alert-box {alert_class}">
-            <b>{cpk_info['icon']} {cpk_info['status']}</b><br>
-            {cpk_info['desc']}<br><br>
-            <b>Önerilen Aksiyon:</b><br>
-            {cpk_info['action']}
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # PPM ve Sigma
+        # PPM ve Sigma seviyesi
         if metrics['ppm'] is not None:
-            ppm_text = f"{metrics['ppm']:,.0f}" if metrics['ppm'] >= 1 else "< 1"
-            sigma_text = f"{metrics['sigma_level']:.1f}σ" if metrics['sigma_level'] else "-"
-            st.markdown(f"""
-            <div class="info-box">
-                <b>📊 PPM (Milyonda Hata):</b> {ppm_text}<br>
-                <b>📈 Sigma Seviyesi:</b> {sigma_text}
-            </div>
-            """, unsafe_allow_html=True)
-        
-        # Tolerans dışı
-        if usl and lsl:
-            out_spec = count_out_of_limits(data, usl, lsl)
-            if out_spec > 0:
+            col_ppm1, col_ppm2 = st.columns(2)
+            
+            with col_ppm1:
                 st.markdown(f"""
-                <div class="alert-box alert-danger">
-                    <b>⚠️ Tolerans Dışı:</b> {out_spec} adet ({out_spec/len(data)*100:.1f}%)
+                <div class="metric-card">
+                    <div class="metric-label">PPM (Hata/Milyon)</div>
+                    <div class="metric-value">{metrics['ppm']:,.0f if metrics['ppm'] >= 1 else '< 1'}</div>
+                    <div class="metric-desc">Tahmini hatalı parça</div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col_ppm2:
+                sigma_class = 'excellent' if metrics['sigma_level'] and metrics['sigma_level'] >= 4 else 'warning'
+                st.markdown(f"""
+                <div class="metric-card {sigma_class}">
+                    <div class="metric-label">Sigma Seviyesi</div>
+                    <div class="metric-value">{f"{metrics['sigma_level']:.1f}σ" if metrics['sigma_level'] else '-'}</div>
+                    <div class="metric-desc">Süreç kalite seviyesi</div>
                 </div>
                 """, unsafe_allow_html=True)
 
@@ -1274,9 +1325,9 @@ tab1, tab2, tab3 = st.tabs(["📈 Kontrol Grafiği", "📊 Histogram", "📉 Mov
 with tab1:
     control_fig = create_control_chart(
         data, x_axis, metrics, usl, lsl,
-        title=f"I-MR Kontrol Grafiği - {secili_param}",
+        title=f"I-MR Kontrol Grafiği - {param_info['display_name']}",
         violation_points=violation_points,
-        param_name=secili_param,
+        param_name=param_info['display_name'],
         unit=param_info['birim']
     )
     st.plotly_chart(control_fig, use_container_width=True)
@@ -1295,7 +1346,7 @@ with tab1:
 with tab2:
     hist_fig = create_capability_histogram(
         data, metrics['mean'], metrics['sigma_within'], usl, lsl,
-        title=f"Yetenek Histogramı - {secili_param}"
+        title=f"Yetenek Histogramı - {param_info['display_name']}"
     )
     st.plotly_chart(hist_fig, use_container_width=True)
     
@@ -1326,7 +1377,11 @@ with tab3:
 if COL_MACHINE in df.columns and df[COL_MACHINE].nunique() > 1:
     st.markdown('<p class="section-header">🏭 Makine Karşılaştırma</p>', unsafe_allow_html=True)
     
-    machine_stats = df.groupby(COL_MACHINE)[secili_sutun].agg(['mean', 'std', 'count', 'min', 'max']).round(4)
+    # Sütunu sayısal olarak al
+    df_machine = df.copy()
+    df_machine['_numeric_col'] = convert_column_to_numeric(df_machine, secili_sutun)
+    
+    machine_stats = df_machine.groupby(COL_MACHINE)['_numeric_col'].agg(['mean', 'std', 'count', 'min', 'max']).round(4)
     machine_stats.columns = ['Ortalama', 'Std Sapma', 'Kayıt', 'Min', 'Max']
     machine_stats = machine_stats.sort_values('Kayıt', ascending=False)
     
@@ -1337,9 +1392,9 @@ if COL_MACHINE in df.columns and df[COL_MACHINE].nunique() > 1:
     
     with col_box:
         fig_box = px.box(
-            df, x=COL_MACHINE, y=secili_sutun,
+            df_machine, x=COL_MACHINE, y='_numeric_col',
             color=COL_MACHINE,
-            title=f"Makine Bazlı {secili_param} Dağılımı"
+            title=f"Makine Bazlı {param_info['display_name']} Dağılımı"
         )
         
         fig_box.add_hline(y=metrics['mean'], line_color=COLORS['success'], line_dash='dash',
@@ -1412,10 +1467,10 @@ st.markdown("---")
 st.markdown(f"""
 <center>
 <small>
-📊 <b>Gelişmiş SPC Analiz Sistemi v2.0</b> | {SIRKET_ISMI} | 
+📊 <b>Gelişmiş SPC Analiz Sistemi v2.1</b> | {SIRKET_ISMI} | 
 Analiz: <b>{len(data):,}</b> kayıt | 
 {f"Kesit: <b>{secili_kesit}</b> | " if secili_kesit != 'Tümü' else ""}
-Parametre: <b>{secili_param}</b>
+Parametre: <b>{param_info['display_name']}</b>
 </small>
 </center>
 """, unsafe_allow_html=True)
